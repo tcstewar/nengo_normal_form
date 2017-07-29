@@ -14,6 +14,54 @@ class ProbeNode(nengo.Node):
         self.data.append(x)
         return x
 
+def find_io(model, objs=None, connections=None):
+    if objs is None:
+        objs = model.all_ensembles + model.all_nodes
+    if connections is None:
+        connections = model.all_connections
+    inputs = {}
+    outputs = {}
+    for obj in objs:
+        inputs[obj] = []
+        outputs[obj] = []
+    for c in connections:
+        if c.post_obj in inputs:
+            inputs[c.post_obj].append(c)
+        if c.pre_obj in outputs:
+            outputs[c.pre_obj].append(c)
+    return inputs, outputs
+
+
+def combine_functions(outputs):
+    func_indices = {}
+    funcs = []
+    slices = []
+    total = 0
+    for c in outputs:
+        indices = tuple(np.arange(c.pre_obj.dimensions)[c.pre_slice])
+        key = (c.function, indices)
+        if key in func_indices:
+            slices.append(func_indices[key])
+        else:
+            if c.function is None:
+                funcs.append(lambda x, indices=indices: x[[indices]])
+            else:
+                def f(x, indices=indices, func=c.function):
+                    return func(x[[indices]])
+                funcs.append(f)
+            size = c.size_mid
+
+            s = slice(total, total+size)
+            total += size
+            slices.append(s)
+            func_indices[key] = s
+    if len(outputs) == 0:
+        function = lambda x: x
+    else:
+        function = lambda x: np.hstack([f(x) for f in funcs])
+    return function, slices, total
+
+
 def combine_synapses(synapse_in, synapse_out):
     if not isinstance(synapse_in, nengo.synapses.LinearFilter):
         raise Unconvertible("Cannot merge filter %s" % synapse_in)
@@ -41,7 +89,7 @@ def find_passthrough_nodes(model):
     return nodes, in_nodes, out_nodes
 
 def create_replacement(c_in, c_out):
-    """Generate a new Connection to replace two through a passthrough Node"""
+    """Generate new Connection to replace two through a passthrough Node"""
     assert c_in.post_obj is c_out.pre_obj
     assert c_in.post_obj.output is None
 
@@ -167,6 +215,28 @@ def convert(model,
                          conns)
     for n in to_remove:
         network.nodes.remove(n)
+
+    if single_decoder:
+        inputs, outputs = find_io(model, connections=conns)
+        for ens in network.ensembles:
+            output_conns = outputs[ens]
+            if len(output_conns) > 0:
+                func, slices, dim = combine_functions(output_conns)
+                with network:
+                    dec_node = nengo.Node(None, size_in=dim,
+                                          label='')
+                    nengo.Connection(ens, dec_node, function=func,
+                                     synapse=None)
+                    for i, c in enumerate(output_conns):
+                        conns.remove(c)
+                        nengo.Connection(dec_node[slices[i]],
+                                         c.post,
+                                         synapse=c.synapse,
+                                         transform=c.transform)
+                
+
+            
+
 
 
 
