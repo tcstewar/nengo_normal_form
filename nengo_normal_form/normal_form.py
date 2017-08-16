@@ -44,12 +44,18 @@ def combine_functions(outputs):
             slices.append(func_indices[key])
         else:
             if c.function is None:
-                funcs.append(lambda x, indices=indices: x[[indices]])
+                def func(x, indices=indices):
+                    return x[[indices]]
             else:
-                def f(x, indices=indices, func=c.function):
+                def func(x, indices=indices, func=c.function):
                     return func(x[[indices]])
-                funcs.append(f)
-            size = c.size_mid
+            if c.learning_rule is not None:
+                # roll the transforms into the functions
+                func = lambda x, t=c.transform, func=func: np.dot(t, func(x))
+                size = c.size_out
+            else:
+                size = c.size_mid
+            funcs.append(func)
 
             s = slice(total, total+size)
             total += size
@@ -137,8 +143,12 @@ def create_replacement(c_in, c_out):
         else:
             pre = c_in.pre
 
+        if isinstance(c_out.post_obj, nengo.connection.LearningRule):
+            post = c_out.post_obj
+        else:
+            post = c_out.post_obj[post_indices]
         c = nengo.Connection(pre,
-                             c_out.post_obj[post_indices],
+                             post,
                              synapse=synapse,
                              transform=transform,
                              function=function,
@@ -153,6 +163,9 @@ def remove_nodes(objs, passthrough, original_conns):
         inputs[obj] = []
         outputs[obj] = []
     for c in original_conns:
+        if isinstance(c.post_obj, nengo.connection.LearningRule):
+            if c.post_obj not in inputs:
+                inputs[c.post_obj] = []
         inputs[c.post_obj].append(c)
         outputs[c.pre_obj].append(c)
 
@@ -179,7 +192,6 @@ def remove_nodes(objs, passthrough, original_conns):
 def convert(model,
             probes_as_nodes=True,
             single_decoder=True,
-            fixed_radius=True,
             remove_array_io=True,
             ):
     network = nengo.Network(add_to_container=False)
@@ -234,12 +246,6 @@ def convert(model,
                                          synapse=c.synapse,
                                          transform=c.transform)
                 
-
-            
-
-
-
-
     for c in conns:
         with network:
             pre = c.pre
