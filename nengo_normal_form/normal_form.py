@@ -2,6 +2,11 @@ import nengo
 import numpy as np
 
 
+class DecoderNode(nengo.Node):
+    def __init__(self, size_in):
+        super(DecoderNode, self).__init__(None, size_in=size_in, label='')
+
+
 class ProbeNode(nengo.Node):
     def __init__(self, size_in):
         super(ProbeNode, self).__init__(output=self.collect,
@@ -231,12 +236,13 @@ def convert(model,
     if single_decoder:
         inputs, outputs = find_io(model, connections=conns)
         for ens in network.ensembles:
+            if isinstance(ens.neuron_type, nengo.Direct):
+                continue
             output_conns = outputs[ens]
             if len(output_conns) > 0:
                 func, slices, dim = combine_functions(output_conns)
                 with network:
-                    dec_node = nengo.Node(None, size_in=dim,
-                                          label='')
+                    dec_node = DecoderNode(size_in=dim)
                     nengo.Connection(ens, dec_node, function=func,
                                      synapse=None)
                     for i, c in enumerate(output_conns):
